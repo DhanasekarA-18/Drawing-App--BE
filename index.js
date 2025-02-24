@@ -1,101 +1,95 @@
-// Backend - server.js (Node.js + Express + Socket.io + MongoDB)
 require("dotenv").config();
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
 const cors = require("cors");
 
-// const mongoose = require("mongoose");
-// const connectDB = require("./config/db");
-
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// // Connect to MongoDB (Reuse connection if exists)
-// if (mongoose.connection.readyState === 0) {
-//   connectDB();
-// }
-
-// Create Server & WebSocket
 const server = http.createServer(app);
-
 const io = new Server(server, { cors: { origin: "*" } });
 
-let userDrawings = {}; // Store strokes per user
-let globalDrawing = []; // Store all strokes for syncing new users
+let userSessions = {}; // { userId: socketId }
+let userDrawings = {}; // { userId: strokes[] }
+let globalDrawing = []; // Stores all strokes
 
-io.on("connection", async (socket) => {
-  console.log(`User ${socket.id} connected`);
+io.on("connection", (socket) => {
+  const userId = socket.handshake.query.userId;
+  if (!userId) return socket.disconnect();
 
-  // Notify all other users except the newly connected user
-  socket.broadcast.emit("user-joined", { id: socket.id });
+  userSessions[userId] = socket.id;
 
-  // Send existing global drawing to the new user
-  socket.emit("load-drawing", globalDrawing);
+  console.log(`User ${userId} connected with socket ID: ${socket.id}`);
 
-  socket.emit("welcome", { message: "Connected successfully!" });
+  // Notify all users that a new user has joined
+  socket.broadcast.emit("user-joined", { userId });
 
-  // Handle user drawing
-  socket.on("draw", (data) => {
-    if (!userDrawings[socket.id]) {
-      userDrawings[socket.id] = [];
+  // Send existing strokes to the new user
+  if (userDrawings[userId]) {
+    socket.emit("load-drawing", userDrawings[userId]);
+  }
+
+  socket.on("draw", (dataBatch) => {
+    if (!userDrawings[userId]) {
+      userDrawings[userId] = [];
     }
 
-    userDrawings[socket.id].push(data);
-    globalDrawing.push({ ...data, socketId: socket.id });
+    dataBatch.forEach((data) => {
+      userDrawings[userId].push(data);
+      globalDrawing.push({ ...data, userId });
+    });
 
-    io.emit("draw", data); // Broadcast to all users
+    io.emit("draw", dataBatch);
   });
 
-  // Reset user-specific drawing
-  socket.on("reset", ({ socketId }) => {
-    if (userDrawings[socketId]) {
-      delete userDrawings[socketId]; // Remove only the strokes of that user
-      globalDrawing = globalDrawing.filter(
-        (stroke) => stroke.socketId !== socketId
-      );
+  // ✅ Fix for Reset Functionality
+  socket.on("reset", ({ userId: resetUserId }) => {
+    console.log(`Reset requested by user ${resetUserId}`);
+
+    if (userDrawings[resetUserId]) {
+      delete userDrawings[resetUserId]; // Remove user's strokes
     }
 
-    // Notify all users to update strokes and remove strokes for resetting user
-    io.emit("reset-user", { socketId, updatedStrokes: globalDrawing });
+    // Remove user's strokes from globalDrawing
+    globalDrawing = globalDrawing.filter(
+      (stroke) => stroke.userId !== resetUserId
+    );
+    console.log("Updated globalDrawing:", globalDrawing);
 
-    // Notify the user who reset their canvas
-    io.to(socketId).emit("user-reset", {
-      id: socketId,
+    // Notify all users
+    io.emit("reset-user", {
+      userId: resetUserId,
+      updatedStrokes: [...globalDrawing],
+    });
+
+    // Notify only the user who reset
+    io.to(userSessions[resetUserId]).emit("user-reset", {
+      userId: resetUserId,
       message: "Canvas reset successfully!",
+      toastType: "success",
     });
 
+    // Notify others
     socket.broadcast.emit("user-reset", {
-      id: socketId,
-      message: `User ${socketId} reset their canvas.`,
+      userId: resetUserId,
+      message: `User ${resetUserId} reset their canvas.`,
     });
   });
 
-  // Handle user disconnect
   socket.on("disconnect", () => {
-    console.log(`User ${socket.id} disconnected`);
-    io.emit("user-left", { id: socket.id });
-    delete userDrawings[socket.id];
+    console.log(`User ${userId} disconnected`);
+    delete userSessions[userId];
+    io.emit("user-left", { userId });
   });
 });
 
 // Root route
 app.get("/", (req, res) => {
-  res.send(`<h1>🔥Drawing APP Running Successfully🔥</h1>`);
+  res.send(`<h1>🔥 Real-Time Drawing App Running Successfully 🔥</h1>`);
 });
 
 // Start Server
 const PORT = process.env.PORT || 5002;
-server
-  .listen(PORT, () => console.log(`Server running on port ${PORT}`))
-  .on("error", (err) => {
-    if (err.code === "EADDRINUSE") {
-      console.error(
-        `Port ${PORT} is already in use. Trying with port ${PORT + 1}`
-      );
-      server.listen(PORT + 1);
-    } else {
-      console.error(err);
-    }
-  });
+server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
