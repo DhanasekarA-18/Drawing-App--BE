@@ -25,7 +25,7 @@ let globalDrawing = []; // Stores all strokes permanently
 
 io.on("connection", (socket) => {
   const userId = socket.handshake.query.userId;
-  if (!userId) return socket.disconnect();
+  // if (!userId) return socket.disconnect();
 
   userSessions[userId] = socket.id;
 
