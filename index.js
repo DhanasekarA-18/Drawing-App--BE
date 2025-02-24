@@ -12,16 +12,16 @@ const server = http.createServer(app);
 
 const io = new Server(server, {
   cors: {
-    origin: "*", // Ensure frontend can connect
+    origin: "*",
     methods: ["GET", "POST"],
     credentials: true,
   },
-  transports: ["polling", "websocket"], // Prioritize polling over WebSocket
+  transports: ["polling", "websocket"],
 });
 
 let userSessions = {}; // { userId: socketId }
 let userDrawings = {}; // { userId: strokes[] }
-let globalDrawing = []; // Stores all strokes
+let globalDrawing = []; // Stores all strokes permanently
 
 io.on("connection", (socket) => {
   const userId = socket.handshake.query.userId;
@@ -31,13 +31,9 @@ io.on("connection", (socket) => {
 
   console.log(`User ${userId} connected with socket ID: ${socket.id}`);
 
-  // Notify all users that a new user has joined
   socket.broadcast.emit("user-joined", { userId });
 
-  // Send existing strokes to the new user
-  if (userDrawings[userId]) {
-    socket.emit("load-drawing", userDrawings[userId]);
-  }
+  socket.emit("load-drawing", globalDrawing);
 
   socket.on("draw", (dataBatch) => {
     if (!userDrawings[userId]) {
@@ -52,42 +48,35 @@ io.on("connection", (socket) => {
     io.emit("draw", dataBatch);
   });
 
-  socket.on("reset", ({ userId: resetUserId }) => {
-    console.log(`Reset requested by user ${resetUserId}`);
+  socket.on("reset", () => {
+    if (!userDrawings[userId]) return;
 
-    if (userDrawings[resetUserId]) {
-      delete userDrawings[resetUserId]; // Remove user's strokes
-    }
+    delete userDrawings[userId];
 
-    // Remove user's strokes from globalDrawing
-    globalDrawing = globalDrawing.filter(
-      (stroke) => stroke.userId !== resetUserId
-    );
-    console.log("Updated globalDrawing:", globalDrawing);
+    globalDrawing = globalDrawing.filter((stroke) => stroke.userId !== userId);
 
-    // Notify all users
+    console.log(`Updated globalDrawing after ${userId} reset:`, globalDrawing);
+
     io.emit("reset-user", {
-      userId: resetUserId,
-      updatedStrokes: [...globalDrawing],
+      userId,
+      updatedStrokes: globalDrawing,
     });
 
-    // Notify only the user who reset
-    io.to(userSessions[resetUserId]).emit("user-reset", {
-      userId: resetUserId,
-      message: "Canvas reset successfully!",
+    io.to(userSessions[userId]).emit("user-reset", {
+      message: "Your canvas was reset successfully!",
       toastType: "success",
     });
 
-    // Notify others
     socket.broadcast.emit("user-reset", {
-      userId: resetUserId,
-      message: `User ${resetUserId} reset their canvas.`,
+      message: `User ${userId} reset their canvas.`,
     });
   });
 
   socket.on("disconnect", () => {
     console.log(`User ${userId} disconnected`);
+
     delete userSessions[userId];
+
     io.emit("user-left", { userId });
   });
 });
