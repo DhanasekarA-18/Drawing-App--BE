@@ -52,7 +52,6 @@ io.on("connection", (socket) => {
     io.emit("draw", dataBatch);
   });
 
-  // ✅ Fix for Reset Functionality
   socket.on("reset", ({ userId: resetUserId }) => {
     console.log(`Reset requested by user ${resetUserId}`);
 
